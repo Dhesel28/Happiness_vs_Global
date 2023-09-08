@@ -1,0 +1,512 @@
+---
+title: "Challenge 1"
+author: "Hawea Derauf, Dhesel Khando,Swagat Malla, Meg Prapatthong"
+date: "2/28/2023"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load libraries
+library(tidymodels)
+tidymodels_prefer(quiet = T)
+library(discrim)
+library(tidyverse)
+library(dslabs)
+library("glmnet")
+library(yardstick)
+
+# Plot Digit Images Functions
+plot_digit <- function(image) {
+  a_digit <- matrix(image, nrow=28)
+  
+  image(a_digit[,28:1])
+}
+```
+
+# Introduction
+
+Every person writes numbers in a different way; some write dashes through their sevens to avoid confusion with a one, while others might write a number that is slanted. Is it possible for a machine to distinguish between numbers that are written in different ways? This is where the tidymodels package in R Studio comes in handy, as it is a powerful tool for supervised learning in machine learning. This project explores the usage of supervised learning to distinguish between hand-written digits.
+
+To tackle this challenge, we have developed two features to differentiate between the numbers 3 and 1. The first feature calculates the width of each digit and the sum of dark pixels in the middle column. The second feature takes the sum of dark pixels in quadrants 2 and 4. Further details on how we created these two features will be discussed in the Feature Description section below.
+
+
+
+# Loading the Data
+
+Our dataset comes from the package `mnist` which contains matrices that represent certain digits. We will use digits 1 and 3 as a start to test our features. We first load in the package, select digits 3 and one images, create two separated lists of each digit called `three_images` and `one_images`. As we will also be adding digit 6 in the last section of our report, we will also create `six_images`. 
+
+As you can see from the datasets, there are 6131 images of `three_images`,  6742 images `one_images` and 5918 inmates of `six_images`. Each digit contains a 28x28 matrix with each matrix filled with a value of dark pixels.
+
+```{r load data}
+#load in dataset
+mnist <- read_mnist("~/Mscs 341 S23/Class/Data")
+set.seed(123)
+
+# naming datasets
+three <- mnist$train$labels==3
+three_images <- mnist$train$images[three,]
+one <- mnist$train$labels==1
+one_images <- mnist$train$images[one,]
+
+six <- mnist$train$labels==6
+six_images <- mnist$train$images[six,]
+```
+
+
+# First Feature: Widths of Digits and the Sum of their Middle Columns
+
+## Function to find all widths
+```{r width_mid function}
+find_digit_width <- function(img){
+  img <- t(img)
+  col_idx = 1  #column index for the first hit
+  while(sum(img[,col_idx]) == 0){
+  col_idx = col_idx + 1
+  }
+  
+  col_idx2 = dim(img)[2] #column index for the second hit
+  while(sum(img[,col_idx2]) == 0){
+  col_idx2 = col_idx2 -1
+  }
+  
+  return (col_idx2 - col_idx)
+}
+
+find_all_width<- function(digit){ #returns a vector
+  row <- nrow(digit)
+  width <- vector(mode="integer", length=row)
+  for (i in 1:row){
+    a_digit <- matrix(digit[i,], nrow=28)
+    width[i] <- find_digit_width(a_digit)
+  }
+  return(width)
+}
+```
+
+## Functions to find the middle column sum of ink used
+
+```{r middle function}
+middle <- function(number_images){
+  row <- nrow(number_images)
+  mid_total <- vector(mode = "integer", length = row)
+  mid_row <- 14
+  
+  for (i in 1:row){
+    a_digit <- matrix(number_images[i,], nrow=28)
+    a_digit <- t(a_digit)
+    mid_total[i] <- sum(a_digit[,mid_row])
+  }
+  mid_total
+}
+```
+
+
+# Second Feature: Calculating Amount of Ink Used in Quadrants 2 and 4
+
+## Function to sum ink
+```{r quadrant function}
+quadrant<- function(digit){ #expects a vector
+  row_3<- nrow(three_images)
+  row_1<- nrow(one_images)
+  row <- nrow(digit)
+  x_1 <- vector(mode="integer", length=row)
+  x_2 <- vector(mode="integer", length=row)
+  for (i in 1:row){
+    a_digit <- matrix(digit[i,], nrow=28)
+    x_1[i] <- sum(colSums(a_digit[1:14, 1:14]))
+    x_2[i] <- sum(colSums(a_digit[14:28, 14:28]))
+  }
+  return(tibble(x_1,x_2))
+}
+```
+
+# Model Creation
+
+## Feature 1
+
+```{r creating table}
+# width
+width<- find_all_width(three_images)
+numberr <-as.character(3) #making column full of threes
+three_tibble <- tibble(numberr, width)
+width <- find_all_width(one_images)
+numberr <-as.character(1)
+one_tibble<-tibble(numberr, width)
+three_one_tbl <- rbind(three_tibble,one_tibble)
+
+#middle sum
+sum_mid <- middle(three_images)
+number <-as.character(3)
+three_mid <- tibble(number, sum_mid)
+sum_mid <- middle(one_images)
+number <-as.character(1)
+one_mid<-tibble(number, sum_mid)
+mid_31_tbl <- rbind(three_mid,one_mid)
+
+df_levels = c("3", "1")
+
+raw_number_tbl <- cbind(mid_31_tbl, three_one_tbl) %>% 
+  select(number, width, sum_mid) %>% 
+  mutate(number = factor(number,levels=df_levels))
+
+# random 1000 digits
+set.seed(123)
+number_tbl<-sample_n(number_tbl, size = 1000)
+```
+
+```{r model prep}
+num_split <- initial_split(number_tbl, prop=0.8)
+num_train_tbl <- training(num_split)
+num_test_tbl <- testing(num_split)
+# recipe
+number_recipe <- 
+  recipe(number ~ width + sum_mid, data=num_train_tbl)
+
+# LDA
+
+lda_model <- discrim_linear() %>%
+  set_engine("MASS") %>%
+  set_mode("classification")
+
+lda_wflow <- workflow() %>%
+  add_recipe(number_recipe) %>%
+  add_model(lda_model) 
+
+lda_fit <- fit(lda_wflow, num_train_tbl)
+
+# QDA
+
+qda_mod <-discrim_quad() %>% 
+    set_engine("MASS") %>%
+    set_mode("classification")
+
+qda_wflow <- workflow() %>%
+  add_recipe(number_recipe) %>%
+  add_model(qda_mod) 
+
+qda_fit_width <- fit(qda_wflow ,num_train_tbl)
+```
+
+```{r model evaluation Feature 1 }
+models <- list("lda" = lda_fit,
+               "qda" = qda_fit_width)
+number_test_pred <- imap_dfr(models, augment, 
+                                 new_data = num_test_tbl,
+                                 .id = "model")
+
+multi_metric <-
+  metric_set(accuracy, yardstick::sensitivity, yardstick::specificity)
+
+# Accuracy, Sense, Spec
+number_test_pred %>%
+  group_by(model) %>%
+  multi_metric(truth = number, estimate = .pred_class)
+# qda   accuracy    binary         0.865
+
+# Confusion Matrix of QDA
+nnum_test_tbl<-qda_fit_width %>% 
+  augment(num_test_tbl)
+  
+nnum_test_tbl %>% 
+  conf_mat(number, .pred_class)
+
+# Misclassification Rate for QDA
+mean(nnum_test_tbl$.pred_class!=nnum_test_tbl$number) # 0.135
+
+# Misclassification Rate for LDA
+nnum_test_tbl<-lda_fit %>% 
+  augment(num_test_tbl)
+
+mean(nnum_test_tbl$.pred_class!=nnum_test_tbl$number)
+
+```
+
+## Feature 2
+
+```{r creating table2}
+ink<-quadrant(three_images)
+number <-as.character(3)
+three_tibble <- tibble(number, ink)
+ink <- quadrant(one_images)
+number <-as.character(1)
+one_tibble<-tibble(number, ink)
+ink_31_tbl <- rbind(three_tibble,one_tibble)
+
+df_levels = c("3", "1")
+
+ink_tbl <- ink_31_tbl %>% 
+  mutate(number = factor(number,levels=df_levels)) %>% 
+  as.tibble()
+
+ink_tbl<-sample_n(ink_tbl, size = 1000) 
+```
+
+```{r model}
+ink_split <- initial_split(ink_tbl, prop=0.8)
+ink_train_tbl <- training(ink_split)
+ink_test_tbl <- testing(ink_split)
+
+ink_recipe <- 
+  recipe(number ~ x_1 + x_2, data=ink_train_tbl)
+
+#LDA
+lda_wflow <- workflow() %>%
+  add_recipe(ink_recipe) %>%
+  add_model(lda_model) 
+
+lda_fit <- fit(lda_wflow, ink_train_tbl)
+
+# QDA
+qda_wflow <- workflow() %>%
+  add_recipe(ink_recipe) %>%
+  add_model(qda_mod) 
+
+qda_fit <- fit(qda_wflow ,ink_train_tbl)
+
+models <- list("lda" = lda_fit,
+               "qda" = qda_fit)
+ink_test_pred <- imap_dfr(models, augment, 
+                                 new_data = ink_test_tbl,
+                                 .id = "model")
+
+# accuracy
+ink_test_pred %>%
+  group_by(model) %>%
+  multi_metric(truth = number, estimate = .pred_class)
+# lda   accuracy    binary         0.865
+```
+
+The accuracy of feature 2 is better with the lda.
+
+# Visualization and Misclassification
+```{r visualization}
+grid_tbl <- expand_grid(width = seq(1,19, by=.01), sum_mid = seq(9,5100, by=17))
+
+new_grid_tbl <- qda_fit_width %>%
+  augment(grid_tbl)
+
+new_grid_tbl %>%
+  pivot_longer(4:5) %>%
+  ggplot(aes(width, sum_mid, z = value, fill=.pred_class)) +
+  geom_raster()+
+  stat_contour(breaks=c(0.51), color="black")
+```
+
+
+```{r}
+nnum_test_tbl %>% 
+  filter(nnum_test_tbl$.pred_class==nnum_test_tbl$number)
+
+which(raw_number_tbl $sum_mid == 1870 & raw_number_tbl$width == 11)
+
+plot_digit(three_images[5107,])
+
+
+mis <- raw_number_tbl %>% 
+  filter(number == 1)
+
+which(mis $sum_mid == 2461 & mis$width == 12)
+  
+plot_digit(one_images[3067,])
+```
+
+# Changing Things Up: Adding Digit 6
+
+## Feature 1
+```{r table prep}
+width <- find_all_width(six_images)
+numberr <-as.character(6)
+six_tibble<-tibble(numberr, width)
+three_one_six <- rbind(three_one_tbl,six_tibble)
+
+sum_mid <- middle(six_images)
+number <-as.character(6)
+six_mid<-tibble(number, sum_mid)
+mid_316_tbl <- rbind(mid_31_tbl,six_mid)
+
+df_levels = c("3", "1", "6")
+
+raw2_number_tbl <- cbind(mid_316_tbl, three_one_six) %>% 
+  select(number, width, sum_mid) %>% 
+  mutate(number = factor(number,levels=df_levels)) %>% 
+  as.tibble()
+
+# random 1000 digits
+set.seed(123)
+number_tbl<-sample_n(raw2_number_tbl, size = 1000)
+```
+
+```{r model width}
+num_split <- initial_split(number_tbl, prop=0.8)
+num_train_tbl <- training(num_split)
+num_test_tbl <- testing(num_split)
+
+# recipe
+number_recipe <- 
+  recipe(number ~ width + sum_mid, data=num_train_tbl)
+
+# LDA
+lda_model <- discrim_linear() %>%
+  set_engine("MASS") %>%
+  set_mode("classification")
+
+lda_wflow <- workflow() %>%
+  add_recipe(number_recipe) %>%
+  add_model(lda_model) 
+
+lda_fit <- fit(lda_wflow, num_train_tbl)
+
+# QDA
+
+qda_mod <-discrim_quad() %>% 
+    set_engine("MASS") %>%
+    set_mode("classification")
+
+qda_wflow <- workflow() %>%
+  add_recipe(number_recipe) %>%
+  add_model(qda_mod) 
+
+qda_fit <- fit(qda_wflow ,num_train_tbl)
+```
+
+```{r all models outputs 1}
+models <- list("lda" = lda_fit,
+               "qda" = qda_fit)
+number6_test_pred <- imap_dfr(models, augment, 
+                                 new_data = num_test_tbl,
+                                 .id = "model")
+
+multi_metric <-
+  metric_set(accuracy, yardstick::sensitivity, yardstick::specificity)
+
+# Accuracy, Sense, Spec
+number6_test_pred %>%
+  group_by(model) %>%
+  multi_metric(truth = number, estimate = .pred_class)
+
+# Confuction Matrix
+number6_test_pred %>% 
+  conf_mat(number, .pred_class)
+
+# Misclassification Rate
+mean(number6_test_pred$.pred_class!=number6_test_pred$number) #0.355 
+                                                              
+```
+
+```{r Plotting misclassified numbers 1,3,6 feature 1}
+
+# The first six that got misclassified
+(number6_test_pred %>%
+  filter(number!=.pred_class, number == 6))[1,]
+
+
+mis <- raw2_number_tbl %>% 
+  filter(number == 6)
+
+which(mis$sum_mid == 1315 & mis$width == 17)  
+  
+plot_digit(six_images[4066,]) # got confused as a three
+
+# The first three that got misclassified
+(number6_test_pred %>%
+  filter(number!=.pred_class, number == 3))[1,]
+
+# second misclassified digitusing feature 1
+mis <- raw2_number_tbl %>% 
+  filter(number == 3)
+
+which(mis $sum_mid == 2269 & mis$width == 11)
+
+plot_digit(three_images[2425,]) # got confused as a 1
+
+```
+
+```{r}
+#
+grid_tbl <- expand_grid(width = seq(1,19, by=.01), sum_mid = seq(9,5100, by=17))
+
+new_grid_tbl <- qda_fit %>%
+  augment(grid_tbl)
+
+new_grid_tbl %>%
+  pivot_longer(4:6) %>%
+  ggplot(aes(width, sum_mid, z = value, fill=.pred_class)) +
+  geom_raster()+
+  stat_contour(breaks=c(0.5), color="black")
+```
+
+## Feature 2
+
+```{r}
+ink<-quadrant(six_images)
+number <-as.character(6)
+six_tibble <- tibble(number, ink)
+ink_631_tbl <- rbind(ink_31_tbl, six_tibble)
+
+df_levels = c("3", "1", "6")
+
+ink_631_tbl <- ink_631_tbl %>% 
+  mutate(number = factor(number,levels=df_levels)) %>% 
+  as.tibble()
+
+ink_631_tbl<-sample_n(ink_631_tbl, size = 1000)
+```
+
+```{r model quadrant}
+ink_split <- initial_split(ink_631_tbl, prop=0.8)
+ink_train_tbl <- training(ink_split)
+ink_test_tbl <- testing(ink_split)
+
+ink_recipe <- 
+  recipe(number ~ x_1 + x_2, data=ink_train_tbl)
+
+#lda
+lda_wflow <- workflow() %>%
+  add_recipe(ink_recipe) %>%
+  add_model(lda_model) 
+
+lda_fit <- fit(lda_wflow, ink_train_tbl)
+
+# QDA
+qda_wflow <- workflow() %>%
+  add_recipe(ink_recipe) %>%
+  add_model(qda_mod) 
+
+qda_fit <- fit(qda_wflow ,ink_train_tbl)
+
+models <- list("lda" = lda_fit,
+               "qda" = qda_fit)
+ink_test_pred <- imap_dfr(models, augment, 
+                                 new_data = ink_test_tbl,
+                                 .id = "model")
+
+# accuracy
+ink_test_pred %>%
+  group_by(model) %>%
+  multi_metric(truth = number, estimate = .pred_class)
+
+# Confuction Matrix
+ink_test_pred %>% 
+  conf_mat(number, .pred_class)
+
+# Misclassification Rate
+mean(ink_test_pred$.pred_class!=ink_test_pred$number) #0.3375
+```
+
+```{r Plotting misclassified numbers 1,3,6 using feature 2}
+
+```
+
+
+
+
+
+
+
+
