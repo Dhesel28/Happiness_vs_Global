@@ -1,512 +1,641 @@
----
-title: "Challenge 1"
-author: "Hawea Derauf, Dhesel Khando,Swagat Malla, Meg Prapatthong"
-date: "2/28/2023"
-output:
-  html_document: default
-  pdf_document: default
-editor_options:
-  chunk_output_type: console
----
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-
-# load libraries
-library(tidymodels)
-tidymodels_prefer(quiet = T)
-library(discrim)
+```{r, setup,include = FALSE}
+library(readr)
+library(dplyr)
+library(car)         # for vif()
+library(Stat2Data)
+library(ggResidpanel)
+library(mosaic)
+library(infer)
+library(skimr)
 library(tidyverse)
-library(dslabs)
-library("glmnet")
-library(yardstick)
+library(stargazer)
+library(mosaic)
+library(infer)
+library(ggformula) 
+library(ggplot2)
+library(psych)
+```
 
-# Plot Digit Images Functions
-plot_digit <- function(image) {
-  a_digit <- matrix(image, nrow=28)
+```{r, include = FALSE}
+World_Happiness_Report <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/World_Happiness_Report.csv", 
+    skip = 1)
+
+Global_Competitiveness_Index<- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Global_Competitiveness_Index.csv",
+     skip = 1)
+
+Gini_index<-read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Gini_index.csv",
+                     skip = 3)
+
+List_of_Countries_by_Continent <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/List_of_Countries_by_Continent.csv")
+
+
+Country_Codes <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Country_Codes.csv")
+
+```
+
+```{r,include = FALSE}
+# Joining Country's ISO 3 code and regions
+World_Happiness_Report<-World_Happiness_Report%>%
+  rename(Country = `Country name`)
+
+Country_Codes <- Country_Codes%>%
+  rename(ISO_alpha3=`Alpha-3 code`)%>%
+  select(Country,ISO_alpha3)
+
+World_Happiness_Report<-left_join(World_Happiness_Report,Country_Codes,by='Country' )
   
-  image(a_digit[,28:1])
-}
-```
-
-# Introduction
-
-Every person writes numbers in a different way; some write dashes through their sevens to avoid confusion with a one, while others might write a number that is slanted. Is it possible for a machine to distinguish between numbers that are written in different ways? This is where the tidymodels package in R Studio comes in handy, as it is a powerful tool for supervised learning in machine learning. This project explores the usage of supervised learning to distinguish between hand-written digits.
-
-To tackle this challenge, we have developed two features to differentiate between the numbers 3 and 1. The first feature calculates the width of each digit and the sum of dark pixels in the middle column. The second feature takes the sum of dark pixels in quadrants 2 and 4. Further details on how we created these two features will be discussed in the Feature Description section below.
-
-
-
-# Loading the Data
-
-Our dataset comes from the package `mnist` which contains matrices that represent certain digits. We will use digits 1 and 3 as a start to test our features. We first load in the package, select digits 3 and one images, create two separated lists of each digit called `three_images` and `one_images`. As we will also be adding digit 6 in the last section of our report, we will also create `six_images`. 
-
-As you can see from the datasets, there are 6131 images of `three_images`,  6742 images `one_images` and 5918 inmates of `six_images`. Each digit contains a 28x28 matrix with each matrix filled with a value of dark pixels.
-
-```{r load data}
-#load in dataset
-mnist <- read_mnist("~/Mscs 341 S23/Class/Data")
-set.seed(123)
-
-# naming datasets
-three <- mnist$train$labels==3
-three_images <- mnist$train$images[three,]
-one <- mnist$train$labels==1
-one_images <- mnist$train$images[one,]
-
-six <- mnist$train$labels==6
-six_images <- mnist$train$images[six,]
-```
-
-
-# First Feature: Widths of Digits and the Sum of their Middle Columns
-
-## Function to find all widths
-```{r width_mid function}
-find_digit_width <- function(img){
-  img <- t(img)
-  col_idx = 1  #column index for the first hit
-  while(sum(img[,col_idx]) == 0){
-  col_idx = col_idx + 1
-  }
+List_of_Countries_by_Continent<-List_of_Countries_by_Continent%>%
+  rename(Countries = `Country or area`)
   
-  col_idx2 = dim(img)[2] #column index for the second hit
-  while(sum(img[,col_idx2]) == 0){
-  col_idx2 = col_idx2 -1
-  }
+
+World_Happiness_Report<-left_join(World_Happiness_Report,List_of_Countries_by_Continent,by='ISO_alpha3')
+```
+
+```{r, include= FALSE}
+# Filtering the year 2019 and joining global competitiveness index 
+Y2019_Happiness_report<-World_Happiness_Report%>%
+  filter(year == 2019)%>%
+  left_join(Global_Competitiveness_Index, by='Countries')
+```
+
+```{r,include=FALSE}
+#Assessing which countries will not be a part of our analysis due to no having a competitiveness score
+Y2019_Happiness_report%>%
+  anti_join(Global_Competitiveness_Index,by = "Countries")%>%
+  select(Countries)
+```
+
+```{r,include=FALSE}
+#Renaming the variables and removing NA variables
+merged<-Y2019_Happiness_report%>%
+  select(Countries,`Competitiveness Index`,`Life Ladder`,`Log GDP per capita`,`Social support`,`Healthy life expectancy at birth`,`GINI index (World Bank estimate), average 2000-2017, unbalanced panel`,`Region_1`,`Continent`)%>%
+  rename(comp_index= `Competitiveness Index`) %>% 
+  rename(Happiness = `Life Ladder`) %>% 
+  rename(log_gdp_percap = `Log GDP per capita`) %>% 
+  rename(gini_index = `GINI index (World Bank estimate), average 2000-2017, unbalanced panel`) %>% 
+  rename(social_sup = `Social support`) %>% 
+  rename(life_expec = `Healthy life expectancy at birth`) %>% 
+  rename(country = `Countries`) %>% 
+  na.omit(your.data.frame)
+
   
-  return (col_idx2 - col_idx)
-}
-
-find_all_width<- function(digit){ #returns a vector
-  row <- nrow(digit)
-  width <- vector(mode="integer", length=row)
-  for (i in 1:row){
-    a_digit <- matrix(digit[i,], nrow=28)
-    width[i] <- find_digit_width(a_digit)
-  }
-  return(width)
-}
 ```
 
-## Functions to find the middle column sum of ink used
+```{r,include=FALSE}
+#modela
+modela<- lm(Happiness ~ comp_index + log_gdp_percap + gini_index+social_sup+life_expec, 
+             data = merged)
+#modelb
+modelb <- lm(Happiness ~ comp_index + gini_index+social_sup+life_expec, 
+             data = merged)
+# model_quadratic
+merged<-merged%>%
+  mutate(gini_squared = gini_index * gini_index)
+model_quadratic <- lm(Happiness ~gini_index+ gini_squared + comp_index + social_sup +life_expec, data = merged)
+summary(model_quadratic)
+confint(model_quadratic)
 
-```{r middle function}
-middle <- function(number_images){
-  row <- nrow(number_images)
-  mid_total <- vector(mode = "integer", length = row)
-  mid_row <- 14
-  
-  for (i in 1:row){
-    a_digit <- matrix(number_images[i,], nrow=28)
-    a_digit <- t(a_digit)
-    mid_total[i] <- sum(a_digit[,mid_row])
-  }
-  mid_total
-}
-```
-
-
-# Second Feature: Calculating Amount of Ink Used in Quadrants 2 and 4
-
-## Function to sum ink
-```{r quadrant function}
-quadrant<- function(digit){ #expects a vector
-  row_3<- nrow(three_images)
-  row_1<- nrow(one_images)
-  row <- nrow(digit)
-  x_1 <- vector(mode="integer", length=row)
-  x_2 <- vector(mode="integer", length=row)
-  for (i in 1:row){
-    a_digit <- matrix(digit[i,], nrow=28)
-    x_1[i] <- sum(colSums(a_digit[1:14, 1:14]))
-    x_2[i] <- sum(colSums(a_digit[14:28, 14:28]))
-  }
-  return(tibble(x_1,x_2))
-}
-```
-
-# Model Creation
-
-## Feature 1
-
-```{r creating table}
-# width
-width<- find_all_width(three_images)
-numberr <-as.character(3) #making column full of threes
-three_tibble <- tibble(numberr, width)
-width <- find_all_width(one_images)
-numberr <-as.character(1)
-one_tibble<-tibble(numberr, width)
-three_one_tbl <- rbind(three_tibble,one_tibble)
-
-#middle sum
-sum_mid <- middle(three_images)
-number <-as.character(3)
-three_mid <- tibble(number, sum_mid)
-sum_mid <- middle(one_images)
-number <-as.character(1)
-one_mid<-tibble(number, sum_mid)
-mid_31_tbl <- rbind(three_mid,one_mid)
-
-df_levels = c("3", "1")
-
-raw_number_tbl <- cbind(mid_31_tbl, three_one_tbl) %>% 
-  select(number, width, sum_mid) %>% 
-  mutate(number = factor(number,levels=df_levels))
-
-# random 1000 digits
-set.seed(123)
-number_tbl<-sample_n(number_tbl, size = 1000)
-```
-
-```{r model prep}
-num_split <- initial_split(number_tbl, prop=0.8)
-num_train_tbl <- training(num_split)
-num_test_tbl <- testing(num_split)
-# recipe
-number_recipe <- 
-  recipe(number ~ width + sum_mid, data=num_train_tbl)
-
-# LDA
-
-lda_model <- discrim_linear() %>%
-  set_engine("MASS") %>%
-  set_mode("classification")
-
-lda_wflow <- workflow() %>%
-  add_recipe(number_recipe) %>%
-  add_model(lda_model) 
-
-lda_fit <- fit(lda_wflow, num_train_tbl)
-
-# QDA
-
-qda_mod <-discrim_quad() %>% 
-    set_engine("MASS") %>%
-    set_mode("classification")
-
-qda_wflow <- workflow() %>%
-  add_recipe(number_recipe) %>%
-  add_model(qda_mod) 
-
-qda_fit_width <- fit(qda_wflow ,num_train_tbl)
-```
-
-```{r model evaluation Feature 1 }
-models <- list("lda" = lda_fit,
-               "qda" = qda_fit_width)
-number_test_pred <- imap_dfr(models, augment, 
-                                 new_data = num_test_tbl,
-                                 .id = "model")
-
-multi_metric <-
-  metric_set(accuracy, yardstick::sensitivity, yardstick::specificity)
-
-# Accuracy, Sense, Spec
-number_test_pred %>%
-  group_by(model) %>%
-  multi_metric(truth = number, estimate = .pred_class)
-# qda   accuracy    binary         0.865
-
-# Confusion Matrix of QDA
-nnum_test_tbl<-qda_fit_width %>% 
-  augment(num_test_tbl)
-  
-nnum_test_tbl %>% 
-  conf_mat(number, .pred_class)
-
-# Misclassification Rate for QDA
-mean(nnum_test_tbl$.pred_class!=nnum_test_tbl$number) # 0.135
-
-# Misclassification Rate for LDA
-nnum_test_tbl<-lda_fit %>% 
-  augment(num_test_tbl)
-
-mean(nnum_test_tbl$.pred_class!=nnum_test_tbl$number)
+#model_interaction
+merged <- merged %>% 
+  mutate(gini_quartile = ntile(gini_index, 4 ))
+model_interaction <-lm(Happiness ~ comp_index+ gini_quartile + comp_index:factor(gini_quartile) + social_sup +life_expec, data = merged )
 
 ```
 
-## Feature 2
+## __Introduction__	
+In many respects, when a country’s economy improves, for example by becoming more globalized, it is presumed that its population’s quality of life will improve as well. On its surface this makes sense: stronger economies often play a more active role in markets and production, leading to lower levels of unemployment. These lower levels of unemployment likely allow citizens the opportunity to secure income and support themselves, ultimately allowing for them to live more satisfied lives. That being said, although quality of life may improve under these economic circumstances, can the same be said in terms of happiness? 
 
-```{r creating table2}
-ink<-quadrant(three_images)
-number <-as.character(3)
-three_tibble <- tibble(number, ink)
-ink <- quadrant(one_images)
-number <-as.character(1)
-one_tibble<-tibble(number, ink)
-ink_31_tbl <- rbind(three_tibble,one_tibble)
+In their 2019 Global Competitiveness report, the World Economic Forum (WEF) stated that there was “no inherent trade-off between building competitiveness, creating more equitable societies that provide opportunity for all” (Schwab, 2019).  However, as we approach later stages of capitalism, this paradigm of economic growth inherently having a positive impact on a country’s population becomes far more nuanced. Our multivariate analysis of countries’, Global Competitiveness Index (GCI) and World Happiness Score (WHS) attempts to further examine this assertion, to see if this type of development truly helps citizens in terms of their happiness and quality of life. Although measuring something as conceptual as happiness and as subjective as economic competitiveness is quite complex and presents its own sets of challenges, these two indices take an all encompassing approach in their calculations and include a diverse range of inputs. For example, the WHS is calculated through analysis from things ranging from factors such as life expectancy, a measurement of income inequality known as the Gini Index, and even population surveys measuring things such as generosity. Similarly, a country’s GCI is measured through a compilation of inputs such as Infrastructure, Innovation Capability, Market Size, etc.. 
 
-df_levels = c("3", "1")
+In this analysis a country’s competitiveness can be defined as its ability to meet or exceed the demands of markets and to create economic stability as well as their ability to keep pace with other global innovation. Another element of our analysis is the Gini Index, a measure of income inequality that ranges from zero to one, in which the closer the score is to one,the more income and wealth inequality is present. Typically the standard interpretation for the Gini Index, as described by UNICEF, is that a Gini Index is that <0.2 corresponds with perfect income equality, 0.2–0.3 corresponds with relative equality, 0.3–0.4 corresponds with a relatively reasonable income gap, 0.4–0.5 corresponds with high income disparity, and anything above 0.5 correspond to a substantial level of income inequality. This analysis also incorporates the measurement of Log GDP per capita into account, which can be understood as the growth of the economic output of a nation per person. This factor is logged as it serves as a clearer proxy for growth. 
 
-ink_tbl <- ink_31_tbl %>% 
-  mutate(number = factor(number,levels=df_levels)) %>% 
-  as.tibble()
+Previous scholarly literature written on this matter often emphasizes the importance for economic advancement and human development to grow in tandem with one another to obtain higher levels of sustainable integration and overall happiness (Kiefer, 2021). This is because if a country's economy expands too quickly and proper precautions aren’t taken to protect workers’ and human rights in the process, a population’s quality of life may suffer. This stems from an issue commonly referred to as the “race to the bottom”, in which a government or firm may undercut competition’s prices by sacrificing workers’ safety or quality of their supply, to lower labor costs and bolster their economic competitiveness. As suggested by an article by the ASEAN Journal on Science & Technology for Development, competitiveness can actually hinder the economic growth of a country due to these issues (Zainurossalamia, 2021). Similar research published by the Informatica Economica journal emphasized similar sentiments, in which researchers employed logistic regressions with Human Development Index (HDI) as the categorical dependent variable to assess the “odds ratio of each predictor”. The study determined that GDP per capita, Poverty rate, and Wealth played a statistically significant role in predicting the HDI of a country (Georgescu, 2020). Thus, previous research suggests that there may be a link between happiness and human and economic development. Further analysis into this matter is warranted in order to better understand the cost of economic competitiveness on a country’s happiness. 
 
-ink_tbl<-sample_n(ink_tbl, size = 1000) 
+By employing multivariate regressions this analysis seeks to determine whether happiness is helped or hindered by economic competitiveness to answer the question: To what degree do factors contributing to GCI impact a country's overall happiness and is their a certain point in which global economic competitiveness no longer serves civilians in terms of improving their overall happiness and life satisfaction? Based on previous literature, we believe that GCI will have a significant impact on determining happiness and that overall countries with greater GCI scores will experience higher happiness scores. Although, we project that developing countries may face a point in which increasing GCI and becoming more competitive will result in higher levels of happiness due to factors stemming from the “race to the bottom”. 
+
+## __Materials & Methods__
+In this analysis we utilize data from two main reports that shed light on a country’s happiness and competitiveness. In terms of providing a measurement of happiness, we pulled data from the 2019 World HappinessReport (WHR) 2019, which is an index calculated by multiplying average national data (collected via surveys and information from the World Bank) for the period by different factors such as Log GDP Per Capita,Gini Index, Social Support, etc. The data for the WHR is compiled using Gallup World Poll surveys. The second main source of data is The Global Competitiveness Report(GCR) from 2019, an index that reports on a country’s economic standings and development. The GCI is calculated using different economic metrics that are categorized as impacting a country’s economic environment, human capital, markets, and innovation. We specifically chose to analyze data from 2019 in order to avoid potential inconsistencies that may have stemmed from the Covid-19 pandemic of 2020. In this analysis competitiveness can be understood to mean the microeconomic and macroeconomic foundations of national economic productivity. In addition to this, our final dataset also includes regional data which we have scraped from the UN Statistics Division in order to apply regional interpretations to our analysis.
+
+Before developing our initial model, we took proper precautions to validate and clean our data and assess for potential outliers. First, we only ran our analysis on countries that were included within both the GCR and WHR; after joining these two reports we lost a total of 20 countries that were not included in the GCR. From there we removed an additional thirty countries due to the fact that they were missing values of our main explanatory variables: Competitiveness, Log GDP Per Capita, Social Support, and Gini Index. After limiting our data set to this degree we were left with a total of 99 observations, or in this case, countries to analyze. We also assessed whether our data consisted of any outliers, utilizing the Cooks Distance calculation it was also determined that the data contained 7 influential points. Despite being outside of the norms of our overall data set, including anomalies such as those identified in our final dataset is important in the sense that they may include insights to more nuanced elements of our modeling. Ideally, we would have preferred to keep more observations to enhance our analysis, however, our model still conveys significant findings that hold relevance and are able to assist in answering our research questions. 
+
+Prior to running our multivariate regressions, we made sure to conduct summary statistics and evaluate the relationship between happiness and our explanatory variables. First we calculated the center, spread and range of the dataset by calculating mean, median, standard deviation, minimum, and maximum of the variables within our analysis. One of our main ways of doing so was by creating a matrix of different scatter plots that assessed the relationship between happiness and our explanatory variables. While developing our models we also employed a strategy of forwards and backwards elimination by adding our different explanatory variables to individually and assessed the overall impact the addition to each individual independent variable had on the overall model. This strategy was particularly useful in helping us identify potential collinearity between the GCI and Log GDP per capita. Additionally, in efforts to make up for the less overt relationship between Gini Index and WHS we generated a categorical version of the index, in which each country's Gini Indices were separated by quartiles. In this sense, countries with higher Gini Indices exhibiting more income inequality would be in the fourth quartile, whereas those with lower Gini Indices and less income equality would be sorted into the first quartile. 
+
+Throughout our analysis we highlight specific results from Rwanda, Malaysia, and Denmark, three countries with varying levels of GCI and WHS, in a case study fashion to provide a more tangible understanding of our findings. We specifically selected these countries to analyze because they provided particularly interesting findings as well as provided representation of a variety of global regions and cultures. 
+
+## __Results__
+
+Our results below are organized into the following order: summary statistics, multivariate OLS regression model comparisons, and finally model and results visualization. Throughout our results, when appropriate, we will reference our three case study countries: Rwanda, Malaysia, and Denmark. The dataset that we used to produce our final results included observations from 99 countries, spanning across all continents except Antarctica. 
+
+**Table 1: Summary Statistic **
+```{r echo=FALSE,warning=FALSE,message = FALSE}
+describe(merged,fast=TRUE)
 ```
 
-```{r model}
-ink_split <- initial_split(ink_tbl, prop=0.8)
-ink_train_tbl <- training(ink_split)
-ink_test_tbl <- testing(ink_split)
+The competitive index (47.31) and life expectancy(26.40) has the highest range of data while gini index has the lowest range (0.37) of data. Here Happiness(sd = 1.13),log_gdp_percap (sd = 1.08), gini_index (sd = 0.09) and social support (0.12) are all between 0 and 2. While, Life expectancy (sd = 6.43) and competitive index (11.87) have standard deviation greater than 2. 
 
-ink_recipe <- 
-  recipe(number ~ x_1 + x_2, data=ink_train_tbl)
-
-#LDA
-lda_wflow <- workflow() %>%
-  add_recipe(ink_recipe) %>%
-  add_model(lda_model) 
-
-lda_fit <- fit(lda_wflow, ink_train_tbl)
-
-# QDA
-qda_wflow <- workflow() %>%
-  add_recipe(ink_recipe) %>%
-  add_model(qda_mod) 
-
-qda_fit <- fit(qda_wflow ,ink_train_tbl)
-
-models <- list("lda" = lda_fit,
-               "qda" = qda_fit)
-ink_test_pred <- imap_dfr(models, augment, 
-                                 new_data = ink_test_tbl,
-                                 .id = "model")
-
-# accuracy
-ink_test_pred %>%
-  group_by(model) %>%
-  multi_metric(truth = number, estimate = .pred_class)
-# lda   accuracy    binary         0.865
+```{r echo=FALSE, results='hide',message=FALSE}
+merged %>%
+  select(Happiness, comp_index, log_gdp_percap, gini_index, social_sup, life_expec) %>%
+  pairs()+
+  title("Fig 1: Relationships Between \nNumeric Variables")
 ```
 
-The accuracy of feature 2 is better with the lda.
+In examining relationships between the various factors, some positive linear associations with happiness scores are apparent such as those for GCI, GDP, Social Support, and life expectancy. Interestingly, the Gini Index, which measures income or wealth inequality within a country, does not have a clear linear relationship with happiness; nevertheless, it does seem to have a negative linear association. Importantly, the GCI and GDP variables seem to have a very linear connection.
 
-# Visualization and Misclassification
-```{r visualization}
-grid_tbl <- expand_grid(width = seq(1,19, by=.01), sum_mid = seq(9,5100, by=17))
-
-new_grid_tbl <- qda_fit_width %>%
-  augment(grid_tbl)
-
-new_grid_tbl %>%
-  pivot_longer(4:5) %>%
-  ggplot(aes(width, sum_mid, z = value, fill=.pred_class)) +
-  geom_raster()+
-  stat_contour(breaks=c(0.51), color="black")
+```{r,echo = FALSE, results = 'asis',warning = FALSE, message = FALSE}
+Prep_Models <- list(modela,modelb, model_quadratic, model_interaction)
+stargazer(Prep_Models, 
+          title = "Summary result of all four models", 
+          type = 'latex', 
+          align = TRUE, 
+          no.space = TRUE,
+          single.row = TRUE,
+          column.sep.width = "1 pt",
+          font.size = "tiny"
+          )
 ```
 
+In our first multivariate model, the happiness score is regressed on the GCI, log GDP, Gini Index, Social Support, and life expectancy. Log gdp per capita (0.7285) and gini index (0.5174) have p values greater than 0.05, which suggests they are not statistically significant in this model. As we continue our analysis with other models, this changes. The R-squared value drops from 0.66 to 0.665 when we remove the log GDP from the second model, indicating a relative reduction in the model's explanatory power; nevertheless, this does explain a portion of the multicollinearity in the competitive index. Our third approach employs a quadratic regression model by squaring the gini index in order to boost model complexity. Compared to prior models, the increase is  minimal. Our fourth model employs the quartile of gini as the interaction factor, and its r squared value of 0.723 indicates that it has the greatest explanatory power of all the models.
 
+```{r,echo = FALSE,warning = FALSE, message = FALSE}
+merged %>%
+  ggplot(mapping = aes(y = Happiness, x = comp_index, color = factor(Continent)))+ 
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = 'lm', se = FALSE)+
+  labs(title = "Fig 2: Competitive Index vs Happiness",
+       x = "Competitive Index", 
+       y = "Happiness", 
+       color = "Continent") +
+  theme(plot.caption = element_text(hjust=0))
+```
+
+When the Happiness scores of various continents are compared to the GCI, it is discovered that, in general, an increase in the GCI index results in an increase Happiness across the board. It is found that Europe particularly is heavily impacted by GCI, as indicated by its steeper slope, than places such as South America with a less pronounced slope. Overall, this plot suggests that GCI may have a different level of effect depending on continent. 
+
+```{r,echo = FALSE,warning = FALSE, message = FALSE}
+merged %>%
+  ggplot(mapping = aes(x = comp_index, y = Happiness, color = Continent, position = country)) +
+  geom_point() +
+  geom_smooth(method = 'lm')+
+  labs(title = "Fig 3: Competitive Index vs Happiness",
+       x = "Competitive Index",
+       y = "Happiness Score",
+       color = "Continent") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_label(data = subset(merged, country == "Rwanda" | country == "Malaysia" | country == "Denmark"),aes(label = country))
+```
+
+```{r,echo = FALSE,warning = FALSE, message = FALSE}
+merged %>%
+  ggplot(mapping = aes(x = gini_index, y = Happiness, color = Continent, position = country)) +
+  geom_point() +
+  geom_smooth(method = 'lm')+
+  labs(title = "Fig 4: Gini Index vs Happiness",
+       x = "Gini Index",
+       y = "Happiness Score",
+       color = "Continent") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_label(data = subset(merged, country == "Rwanda" | country == "Malaysia" | country == "Denmark"),aes(label = country))
+```
+
+As indicated by both of the scatter plots above our 3 case continents have varying levels of GCI and Gini Indices. Denmark is characterized by having a lower Gini Index, and high GCI, whereas Malaysia has a more middle tiered version of these variables. Rwanda is interesting because it seems to have a fairly low happiness score relative to its Gini Index and GCI. 
+
+```{r,echo = FALSE,warning = FALSE, message = FALSE}
+ggplot(data = merged, aes(y = Happiness, x = comp_index)) + 
+  geom_point() +
+  geom_smooth(method = "lm")+ 
+  ggtitle("Fig 5: Linear Model of GCI & Happiness ")+
+  xlab("Global Competitive Index (GCI)")+
+  ylab("World Happiness Score (WHS)")+  
+  geom_label(data = subset(merged, country == "Rwanda" | country == "Malaysia" | country == "Denmark"),aes(label = country))
+```
+
+As suggested by our finalized linear regression, GCI has a positive linear relationship with WHS. As indicated by the residuals of our three case study countries, there may be other factors outside of our model that determine happiness. 
+
+```{r,echo = FALSE,warning = FALSE, message = FALSE}
+merged$gini_quartile <- as.factor(merged$gini_quartile)
+
+ggplot(data = merged, aes(x = comp_index, y = Happiness, 
+                            color = gini_quartile)) +
+  geom_point() +
+  geom_smooth(formula=y~x,method = "lm",se = FALSE)+
+  xlab("Global Competitive Index (GCI)")+
+  ylab("World Happiness Score (WHS)")+
+  ggtitle("Fig 6: Interaction Impact of Gini Index & GCI ")+  
+  geom_label(data = subset(merged, country == "Rwanda" | country == "Malaysia" | country == "Denmark"),aes(label = country))
+```
+
+This graphic illustrating the interaction between GCI and the Gini Index suggests that there is an interaction impact between the two variables as indicated by there varying slopes. The the less pronounced slope of the 3rd Gini Quartile slope suggest that countries that have relatively high levels of income inequality may be less impacted by a change in GCI as other countries with higher levels of income equality. Similarly, countries with greater levels of income equality see a greater impact in improving happiness as GCI increases. 
+
+## __Discussion__
+Our multivariate analysis, which analyzed the impact of GCI on happiness, suggests that overall the GCI and a country's overall economic stability play a substantial role in the happiness of its citizens. In many ways our findings aligned with our conjectures and hypothesis surrounding the issue: the countries with strong diversified markets and greater levels of GDP often were projected to have higher happiness scores overall. However, in terms of the Gini-Index, which measures wealth inequality, the relationship between the index and happiness wasn’t linear. This was notable based on the grounds that we presumed greater levels of wealth inequality would lead to higher levels of happiness, however, as described by recent literature gini indices may actually be U-shaped due to the effects of signaling and jealousy on happiness (Yu 2017). 
+
+Despite our in depth analysis, the questions surrounding the inputs that go into a country’s overall happiness score are still very nuanced. Because of this, it is of the utmost importance to gain a better understanding of some of the areas which our model may not be able to accurately measure. In the brief Country Case Studies below, which include those ranging from different ends of the happiness spectrum, we shed light on elements of competitiveness and its complex relationship with happiness as a whole.  
+ 
+**Country Case Studies: **
+
+**Rwanda** - In the case of Rwanda, the country is ranked fairly low in regard to happiness, however, it has a relatively high GCI in comparison to countries of similar development status. In comparison to other more economic based variables such as Log GDP Per Capita and the Gini Index, the country is far from the lowest end of the spectrum of our data set. However, the explanatory variable that seems to bring down the variable the most is its second to last rank in social support services. Rwanda’s situation sheds light on the fact that our multivariate analysis alone may not be unable to accurately account for lasting impacts of thing such as social unrest (i.e. the Rwandan Civil War and Genocide) within certain countries (Nkusi 2015). 
+
+**Malaysia** - Despite having an exceedingly high GCI, the overall happiness score is below the average score within the data set. This may indicate that Malaysia as a whole has prioritized expanding their economy and markets while potentially sacrificing the overall happiness of its citizens. As suggested by additional literature, this trend may be attributed to efforts to rapidly expand their economy after the Second Malayan Emergency (1968–1989) (Smart 2005), in which they turned to textile and garment manufacturing to bolster their economy—two industries notorious for lax labor regulations (ibid.). This may suggest that the country is currently a part of the aforementioned “race to the bottom”. 
+
+**Denmark**- This Scandinavian country ranks 3rd overall in terms of happiness, which is largely attributed to the fact that they ranked in the top 5 for almost all of our explanatory variables considered. However, they ranked 6th overall in terms of GCI, which may suggest that, while our model did a fairly good job at predicting Denmark's WHS there may be more nuance behind this calculation that isn't captured by our model. One particular note of interest in terms of Denmark is that in recent decades it has experienced unusually high levels of suicide rates, despite being one of the “happiest” countries (Dyvesether 2018). Although there isn’t a definitive answer as to why this may be, many scholars suggest that there is a difference between one's “happiness” and “satisfaction with life” that may be creating this divergence (ibid.). 
+
+In terms of the external validity, we believe that certain issues stemming from limited observations and data limit the strength of the generalizability and a reliable application of our findings. Although our data included data that spanned over 6 continents, it wasn’t evenly distributed in geographic terms. Ideally, our data set would be stronger and likely better be able to predict happiness overall if we were able to include more data from areas such as South America and Oceania countries. Additionally, in terms of confounding variables the relationship between GCI and Log GDP may both influence each other as well as Happiness, and thus may result in a spurious association between the two. Also, being that our final Interaction Model exhibits an R-Squared value of .723, meaning that about 72.3% of the variability observed in WHS is explained by the regression model, their may be additional variables that hold explanatory significance that our model would benefit from adding, such as government structuring. 
+
+Overall, these examples serve as a way to not only better grasp the inner workings of our model, but also shed light on the limitations that this type of analysis holds. Although scores such as the GCI and WHS are very complex and consider many different factors in their creation, higher level understandings of why this may actually be may require additional cultural context and research. While our final model was strong in the sense that it contained statistically significant results that aligned with similar scholarly literature, in some ways it may not provide robust enough analysis to account for more cultural aspects of happiness. Moving forward, in order to gain a more accurate understanding of the impact of GCI on happiness, similar analysis that includes additional observations and countries in its research would be necessary as well as more robust data sets as a whole with explanatory variables to better account for these differences. Furthermore, while it is important to acknowledge the fact that GCI does impact a country’s happiness level to a statistically significant degree, it is also important to understand the nuances behind said relationship. 
+
+## __Response to Peer Review__
+One of the major suggestions that Rachel and Penn made was for us to cut down on some the wordiness of our sentence structures as well as "slow down" the intro a bit to help better describe certain elements of our research, specifically the Gini Index. To remedy this steps were taken to compartmentalize our intro to provide additional background and explanations to our research. In the intro, more non-economic language was utilized to be more universally understood and accepted. Additionally, in our materials section we added an entire paragraph breaking down things such as the Log GDP per capita, Gini Index, and meaning of competitiveness. Additionally, steps were taken to provide references as examples as to what these values mean. 
+
+Another way we improved our project using the peer feedback was through providing additional visuals within our results section that could be helpful to readers. Particularly in regard to visualizing our final multivariate interaction regression, originally we had only had a single visualization providing a fitted line for each continent, however, due to legibility issues we decided to make sure that graph was larger as well as add a more general regression figure showing our overall fitted line. We also made sure to provide a bit more context for our 3 case study countries.
+
+Overall considering that our major takeaways were to simplify our language and provide more context as well as provide additional visualizations we believe that these suggestions and alterations strengthened our final project to a significant degree. 
+
+## __Appendix__
+
+**Part 1: Works Cited**
+
+Dyvesether, Susanne Mahmood, Merete Nordentoft, Julie Lyng Forman, and Annette Erlangsen. 2018. “Joinpoint Regression Analysis of Suicides in Denmark During 1980-2015.” Danish Medical Journal 65 (4).
+
+Georgescu, Irina, Jani Kinnunen, Armenia Androniceanu, and Ane-Mari Andreoniceanu. “A Computational Approach to Economic Inequality, Happiness and Human Development.” Informatica Economica 24, no. 4/2020 (2020):             16–28. https://doi.org/10.24818/issn14531305/24.4.2020.02.
+
+Helliwell, J., Layard, R., & Sachs, J. . “World Happiness Report 2019.” Sustainable Development Solutions               Network. https://s3.amazonaws.com/happiness-report/2019/WHR19.pdf.
+
+Nkusi, A., Joseph Rwagatare, and Alfred Ndahiro. 2015. Rwanda: Rebuilding of a Nation. Edited by A. Nkusi,              Joseph Rwagatare, and Alfred Ndahiro. Kigali: Fountain Publishers.
+
+Schwab, Klaus. “The Global Competitiveness Report 2019.” World Economic Forum, 2019. 
+        http://www3.weforum.org/docs/WEF_TheGlobalCompetitivenessReport2019.pdf.
+        
+Smart, Alan, and Josephine Smart. 2005. Petty Capitalists and Globalization: Flexibility, Entrepreneurship, and         Economic Development. Petty Capitalists and Globalization: Flexibility, Entrepreneurship, and Economic          Development. Ithaca: State University of New York Press.
+
+Toczydlowska, Emilia; Bruckauf, Zlata (2017). Growing Inequality and Unequal Opportunities in Rich Countries,          Innocenti Research Briefs, no. 16, UNICEF Office of Research - Innocenti, Florence
+
+“UNSD — Methodology: Standard country or area codes for statistical use (M49).” n.d. Accessed December 9, 2022.         https://unstats.un.org/unsd/methodology/m49/.
+
+Weiss, Hilda P. 1964. “Durkheim, Denmark, and Suicide: A Sociological Interpretation of Statistical Data.” Acta         Sociologica 7 (4): 264–78. https://doi.org/10.1177/000169936400700404.
+
+**Part 2 :Variables with their definitions**
+
+1) *Ladder Score*:  The ladder score is response variable and it's type is categorical that has values that ranges from 0 - 10. The score is compiled by asking respondents to rate their overall happiness.
+
+2) *Country* : Country is explanatory variable and it's type is categorical. This serves as common key variable help us join two data sets when comparing.
+
+3) *Regional Indicator*: Regional Indicator is explanatory variable and its type is categorical. This help us identify potential regional geographic trends within the data in terms of happiness and competitiveness
+
+4) *Log GDP per capita* :Log GDP per capita is explanatory variable and its type is quantitative.The values ranges from 6.863 - 11.462 and it is multiplicative change in GDP (measured i $USD). 
+
+5) *Gini Index* : Gini Index is explanatory variable and its type is quantitative with values that ranges from 0-1. Including Gini Index allow us to control things like income/wealth inequality between various countries and how they impact happiness.
+
+6) *Competitiveness Index* : Competitiveness Index is explanatory variable and its type is quantitative with values that ranges from 0-100. This help us in analyzing in terms of its impact on happiness and whether more “competitive” countries from an economic standpoint are also more happy because of it. 
+
+7) *Rank Happiness* : Rank Happiness is explanatory variable and it's type is quantitative with values that ranges from 1 - total number of final countries included. 
+
+8) *Rank Competitiveness* : Rank Competitiveness is a explanatory variable and it's type is quantitative with values that ranges from 1 - total number of final countries included.
+
+**Part 3: R codes used for making Final Data set**
 ```{r}
-nnum_test_tbl %>% 
-  filter(nnum_test_tbl$.pred_class==nnum_test_tbl$number)
+World_Happiness_Report <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/World_Happiness_Report.csv", 
+    skip = 1)
 
-which(raw_number_tbl $sum_mid == 1870 & raw_number_tbl$width == 11)
+Global_Competitiveness_Index<- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Global_Competitiveness_Index.csv",
+     skip = 1)
 
-plot_digit(three_images[5107,])
+Gini_index<-read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Gini_index.csv",
+                     skip = 3)
 
-
-mis <- raw_number_tbl %>% 
-  filter(number == 1)
-
-which(mis $sum_mid == 2461 & mis$width == 12)
-  
-plot_digit(one_images[3067,])
-```
-
-# Changing Things Up: Adding Digit 6
-
-## Feature 1
-```{r table prep}
-width <- find_all_width(six_images)
-numberr <-as.character(6)
-six_tibble<-tibble(numberr, width)
-three_one_six <- rbind(three_one_tbl,six_tibble)
-
-sum_mid <- middle(six_images)
-number <-as.character(6)
-six_mid<-tibble(number, sum_mid)
-mid_316_tbl <- rbind(mid_31_tbl,six_mid)
-
-df_levels = c("3", "1", "6")
-
-raw2_number_tbl <- cbind(mid_316_tbl, three_one_six) %>% 
-  select(number, width, sum_mid) %>% 
-  mutate(number = factor(number,levels=df_levels)) %>% 
-  as.tibble()
-
-# random 1000 digits
-set.seed(123)
-number_tbl<-sample_n(raw2_number_tbl, size = 1000)
-```
-
-```{r model width}
-num_split <- initial_split(number_tbl, prop=0.8)
-num_train_tbl <- training(num_split)
-num_test_tbl <- testing(num_split)
-
-# recipe
-number_recipe <- 
-  recipe(number ~ width + sum_mid, data=num_train_tbl)
-
-# LDA
-lda_model <- discrim_linear() %>%
-  set_engine("MASS") %>%
-  set_mode("classification")
-
-lda_wflow <- workflow() %>%
-  add_recipe(number_recipe) %>%
-  add_model(lda_model) 
-
-lda_fit <- fit(lda_wflow, num_train_tbl)
-
-# QDA
-
-qda_mod <-discrim_quad() %>% 
-    set_engine("MASS") %>%
-    set_mode("classification")
-
-qda_wflow <- workflow() %>%
-  add_recipe(number_recipe) %>%
-  add_model(qda_mod) 
-
-qda_fit <- fit(qda_wflow ,num_train_tbl)
-```
-
-```{r all models outputs 1}
-models <- list("lda" = lda_fit,
-               "qda" = qda_fit)
-number6_test_pred <- imap_dfr(models, augment, 
-                                 new_data = num_test_tbl,
-                                 .id = "model")
-
-multi_metric <-
-  metric_set(accuracy, yardstick::sensitivity, yardstick::specificity)
-
-# Accuracy, Sense, Spec
-number6_test_pred %>%
-  group_by(model) %>%
-  multi_metric(truth = number, estimate = .pred_class)
-
-# Confuction Matrix
-number6_test_pred %>% 
-  conf_mat(number, .pred_class)
-
-# Misclassification Rate
-mean(number6_test_pred$.pred_class!=number6_test_pred$number) #0.355 
-                                                              
-```
-
-```{r Plotting misclassified numbers 1,3,6 feature 1}
-
-# The first six that got misclassified
-(number6_test_pred %>%
-  filter(number!=.pred_class, number == 6))[1,]
+List_of_Countries_by_Continent <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/List_of_Countries_by_Continent.csv")
 
 
-mis <- raw2_number_tbl %>% 
-  filter(number == 6)
-
-which(mis$sum_mid == 1315 & mis$width == 17)  
-  
-plot_digit(six_images[4066,]) # got confused as a three
-
-# The first three that got misclassified
-(number6_test_pred %>%
-  filter(number!=.pred_class, number == 3))[1,]
-
-# second misclassified digitusing feature 1
-mis <- raw2_number_tbl %>% 
-  filter(number == 3)
-
-which(mis $sum_mid == 2269 & mis$width == 11)
-
-plot_digit(three_images[2425,]) # got confused as a 1
+Country_Codes <- read_csv("~/Stats 272 F22/Project/Group 4A: Grace & Dhesel/Datas/Country_Codes.csv")
 
 ```
 
 ```{r}
-#
-grid_tbl <- expand_grid(width = seq(1,19, by=.01), sum_mid = seq(9,5100, by=17))
+# Joining Country's ISO 3 code and regions
+World_Happiness_Report<-World_Happiness_Report%>%
+  rename(Country = `Country name`)
 
-new_grid_tbl <- qda_fit %>%
-  augment(grid_tbl)
+Country_Codes <- Country_Codes%>%
+  rename(ISO_alpha3=`Alpha-3 code`)%>%
+  select(Country,ISO_alpha3)
 
-new_grid_tbl %>%
-  pivot_longer(4:6) %>%
-  ggplot(aes(width, sum_mid, z = value, fill=.pred_class)) +
-  geom_raster()+
-  stat_contour(breaks=c(0.5), color="black")
+World_Happiness_Report<-left_join(World_Happiness_Report,Country_Codes,by='Country' )
+  
+List_of_Countries_by_Continent<-List_of_Countries_by_Continent%>%
+  rename(Countries = `Country or area`)
+  
+
+World_Happiness_Report<-left_join(World_Happiness_Report,List_of_Countries_by_Continent,by='ISO_alpha3')
 ```
-
-## Feature 2
 
 ```{r}
-ink<-quadrant(six_images)
-number <-as.character(6)
-six_tibble <- tibble(number, ink)
-ink_631_tbl <- rbind(ink_31_tbl, six_tibble)
-
-df_levels = c("3", "1", "6")
-
-ink_631_tbl <- ink_631_tbl %>% 
-  mutate(number = factor(number,levels=df_levels)) %>% 
-  as.tibble()
-
-ink_631_tbl<-sample_n(ink_631_tbl, size = 1000)
+# Filtering the year 2019 and joining global competitiveness index 
+Y2019_Happiness_report<-World_Happiness_Report%>%
+  filter(year == 2019)%>%
+  left_join(Global_Competitiveness_Index, by='Countries')
 ```
 
-```{r model quadrant}
-ink_split <- initial_split(ink_631_tbl, prop=0.8)
-ink_train_tbl <- training(ink_split)
-ink_test_tbl <- testing(ink_split)
+```{r}
+#Renaming the variables and removing NA variables
+merged<-Y2019_Happiness_report%>%
+  select(Countries,`Competitiveness Index`,`Life Ladder`,`Log GDP per capita`,`Social support`,`Healthy life expectancy at birth`,`GINI index (World Bank estimate), average 2000-2017, unbalanced panel`,`Region_1`,`Continent`)%>%
+  rename(comp_index= `Competitiveness Index`) %>% 
+  rename(Happiness = `Life Ladder`) %>% 
+  rename(log_gdp_percap = `Log GDP per capita`) %>% 
+  rename(gini_index = `GINI index (World Bank estimate), average 2000-2017, unbalanced panel`) %>% 
+  rename(social_sup = `Social support`) %>% 
+  rename(life_expec = `Healthy life expectancy at birth`) %>% 
+  rename(country = `Countries`) %>% 
+  na.omit(your.data.frame)
 
-ink_recipe <- 
-  recipe(number ~ x_1 + x_2, data=ink_train_tbl)
-
-#lda
-lda_wflow <- workflow() %>%
-  add_recipe(ink_recipe) %>%
-  add_model(lda_model) 
-
-lda_fit <- fit(lda_wflow, ink_train_tbl)
-
-# QDA
-qda_wflow <- workflow() %>%
-  add_recipe(ink_recipe) %>%
-  add_model(qda_mod) 
-
-qda_fit <- fit(qda_wflow ,ink_train_tbl)
-
-models <- list("lda" = lda_fit,
-               "qda" = qda_fit)
-ink_test_pred <- imap_dfr(models, augment, 
-                                 new_data = ink_test_tbl,
-                                 .id = "model")
-
-# accuracy
-ink_test_pred %>%
-  group_by(model) %>%
-  multi_metric(truth = number, estimate = .pred_class)
-
-# Confuction Matrix
-ink_test_pred %>% 
-  conf_mat(number, .pred_class)
-
-# Misclassification Rate
-mean(ink_test_pred$.pred_class!=ink_test_pred$number) #0.3375
+  
 ```
 
-```{r Plotting misclassified numbers 1,3,6 using feature 2}
+```{r,include=TRUE}
+#Assessing which countries will not be a part of our analysis due to no having a competitiveness score
+Y2019_Happiness_report%>%
+  anti_join(Global_Competitiveness_Index,by = "Countries")%>%
+  select(Countries)
+```
+
+The list of the countries that are not included as part of our analysis are Afghanistan, Belarus, Comoros,Congo (Brazzaville),Gambia, Hong Kong S.A.R. of China, Kosovo, Liberia , Libya, Macedonia, Myanmar,Niger,North Cyprus, Palestinian Territories,Sierra Leone,Taiwan Province of China, Togo,Turkey,Turkmenistan and Uzbekistan due to missing competitiveness score.
+
+**Part 4 : Plots, Models and Graphs**
+
+```{r,include=TRUE}
+#generating Variable to show above average happiness and below average happiness 
+mean_Happiness = mean(merged$Happiness)
+mean_Happiness
+
+merged <- merged %>%
+  mutate(Happiness_avg = ifelse(Happiness > mean_Happiness, "Above Average Happiness", "Below Average"),
+         high_happy = ifelse(Happiness > mean_Happiness, 1, 0))  
+
+mean_socsup = mean(merged$social_sup)
+mean_socsup
+
+merged <- merged %>%
+  mutate(socsup_avg = ifelse(social_sup > mean_socsup, "Above Average Social Support", "Below Average Social Support"),
+         high_social_sup = ifelse(social_sup > mean_socsup, 1, 0)) 
+
+mean_comp = mean(merged$comp_index)
+mean_comp
+
+merged <- merged %>%
+  mutate(comp_avg = ifelse(comp_index > mean_comp, "Above Average Competitiveness", "Below Average Competitiveness"),
+         high_comp = ifelse(comp_index > mean_comp, 1, 0)) 
+
+mean_gini = mean(merged$gini_index)
+mean_gini
+
+merged <- merged %>%
+  mutate(gini_avg = ifelse(gini_index > mean_gini, "Above Average Gini Index", "Below Average Gini Index"),
+         high_gini = ifelse(gini_index > mean_gini, 1, 0)) 
+```
+
+**Variable Summaries**
+```{r,echo = FALSE}
+favstats(~ comp_index, data = merged)
+favstats(~ Happiness, data = merged)
+favstats(~ log_gdp_percap, data = merged)
+favstats(~ gini_index, data = merged)
+favstats(~ social_sup, data = merged)
+favstats(~ life_expec, data = merged)
+```
+The competitive index (35.08 - 83.67) and life expectancy(48.7 - 75.1) has the highest range of data while gini index has lowest range (0.2495 - 0.624) of data. Standard deviation measures how dispersed the data is in relation to the mean, a good standard deviation has values no greater than plus or minus 2 SD. Here Happiness(sd = 1.125),log_gdp_percap (sd = 1.074694), gini_index (sd = 0.0852578) and social support (0.114) are all between 0 and 2. Life expectancy (sd = 6.600101) and competitive index (11.95495) have standard deviation greater than 2. 
+
+*Distribution of Responses*
+```{r}
+ggplot(data = merged, mapping = aes(x = comp_index)) + 
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Competitiveness Index")
+
+ggplot(data = merged, mapping = aes(x = Happiness)) + 
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Happiness Index")
+
+ggplot(data = merged, mapping = aes(x = log_gdp_percap)) +
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Log GDP Per Capita ")
+
+ggplot(data = merged, mapping = aes(x = gini_index)) + 
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Gini Index")
+
+ggplot(data = merged, mapping = aes(x = social_sup)) + 
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Social Support Score")
+
+ggplot(data = merged, mapping = aes(x = life_expec)) + 
+  geom_histogram(bins = 15, fill = "darkblue")+
+  ggtitle("Distribution of Life Expectancy")
+```
+The social support is a left skewed distribution.The competitive index distribution has distinctive lower count roughly at 59 and 72.The Happiness's distribution is a left skewed distribution.The life_expectancy is a left skewed distribution.The distribution of log gdp per cap is left skewed distribution.The distribution of gini_index is a right skewed distribution.
+
+**Identifying Leverage Points, Outliers and influential points **
+
+```{r, echo = FALSE}
+# Identifying Leverage Points
+modela_diag <- ls.diag(modela)
+summary(modela_diag)
+
+modela_data <- merged %>%
+  select(country, Happiness, comp_index, log_gdp_percap, gini_index, social_sup, life_expec) %>%
+  mutate(hat = modela_diag$hat,
+         country_num = row_number())
+
+# 0 countries identified when 3(k+1)/n 
+modela_data %>%
+  filter(hat > (3 * 6 / 108)) %>%
+  arrange(desc(hat))
+#6 countries identified when 2(k+1)/n 
+modela_data %>%
+    filter(hat > (2 * 6 / 108)) %>%
+    arrange(desc(hat))
+
+ggplot(data = modela_data, aes(x = country_num, y = hat, label = country)) + 
+  geom_point() +
+  geom_hline(yintercept = 12/108, color = "red", linetype = 2) +
+  geom_hline(yintercept = 18/108, color = "red") +
+  geom_text(hjust = -0.25)
+
+#Identifying Outliers total of 7 outliers Identified
+modela_data <- modela_data %>%
+  mutate(fitted = fitted(modela),
+         std_res = rstandard(modela)) 
+
+modela_data %>%
+  filter(std_res > 2 | std_res < -2) %>%
+  select(country, Happiness, hat, std_res) %>%
+  arrange(desc(abs(std_res)))
+
+ggplot(data = modela_data, aes(x = fitted, y = std_res)) +
+  geom_point() +
+  geom_hline(yintercept = c(-2, 2), color = "red")
+
+#Influential Points Using Cooks Distance
+modela_data <- modela_data %>%
+  mutate(student_res = modela_diag$stud.res) 
+
+modela_data <- modela_data %>%
+  mutate(cooks = modela_diag$cooks) 
+
+modela_data %>%
+  filter(cooks > .5) %>%
+  arrange(desc(cooks))
+
+modela_data %>%
+  filter(cooks > 4/102) %>%
+  select(country, Happiness, hat, std_res, student_res, cooks) %>%
+  arrange(desc(cooks))
+
+#The influential points that are between 
+
+# Plotted Cook's distances by country number (index)
+ggplot(data = modela_data, aes(x = country_num, y = cooks, label = country)) + 
+  geom_point() +
+  geom_hline(yintercept = 4/102, color = "red", linetype = 2) +
+  geom_text(hjust = -0.25)
+
+resid_panel(modela,plots="cookd")
+```
+The seven countries that we identified as the outliers are also influential point that means they are affecting the slope of the model, however we will be including them as they serve purpose within the model.
+
+```{r}
+#Residual Analysis of Initial Model
+resid_panel(modela,plots="R")
+
+# matrix of scatterplots for numeric variables
+merged %>%
+  select(Happiness, comp_index, log_gdp_percap, gini_index, social_sup, life_expec) %>%
+  pairs()
+
+# matrix of correlations for all numeric variables after first
+merged %>%
+  select(Happiness, comp_index, log_gdp_percap, gini_index, social_sup, life_expec) %>%
+  cor()
 
 ```
 
 
+```{r}
+# Graphs for variables
+ggplot(data = merged, aes(y = Happiness, x = comp_index, 
+                            color = socsup_avg)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+The above average social support has interaction impact on the happiness.
+
+```{r}
+ggplot(data = merged, aes(y = Happiness, x = comp_index, 
+                            color = gini_avg)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+```
+The above average and below average Gini index has relatively similar interaction impact on the happiness.
+
+```{r}
+ggplot(data = merged, aes(x = log_gdp_percap, fill = Happiness_avg)) + 
+  geom_density(position = 'fill', alpha = 0.5) 
+
+ggplot(data = merged, aes(x = social_sup, fill = Happiness_avg)) + 
+  geom_density(position = 'fill', alpha = 0.5) 
+
+ggplot(data = merged, aes(x = comp_index, fill = Happiness_avg)) + 
+  geom_density(position = 'fill', alpha = 0.5) 
+
+ggplot(data = merged, aes(x = life_expec, fill = Happiness_avg)) + 
+  geom_density(position = 'fill', alpha = 0.5) 
+
+ggplot(data = merged, aes(x = gini_index, fill = Happiness_avg)) + 
+  geom_density(position = 'fill', alpha = 0.5) 
+```
+
+There appears to be relatively constant positive relationship between above avg happiness level and log GDP, GCI, Life expectancy, and social support. However, the Gini Index is less clear in this regard as there are notable peaks in the plot. 
+
+```{r}
+round(vif(modela), 3)
+round(vif(modelb),3)
+```
+
+Variance Inflation Factor - GDP and Comp_index above 5, suggesting that their may be multicollinearity between variables, when removing Log GDP, the issue of multicollinearity decreases
+
+```{r}
+anova(modelb, modela)
+```
+We use Anova analysis to regions. 
 
 
+```{r}
+#Continent and their proportion 
+merged<- mutate(merged, Happiness_avg = ifelse(Happiness< mean(Happiness), "below_average", "above_average"))
+
+(merged%>%
+  group_by(Happiness_avg,Continent)%>%
+  summarise(n = n(),
+            proportion = n/97))
+
+ggplot(merged) +
+  geom_bar(mapping = aes (x = Continent,fill = Happiness_avg))
+
+```
+
+```{r, include=TRUE}
+
+#Breaking Gini Coefficient into 4 groups
+merged <- merged %>% mutate(gini_quartile = ntile(gini_index, 4 ))
+
+model_interaction <-lm(Happiness ~ comp_index+ gini_quartile + comp_index:factor(gini_quartile) + social_sup +life_expec, data = merged )
+summary(model_interaction)
+confint(model_interaction)
+resid_panel(model_interaction)
+
+#Quadriatic Gini Index Model
+model_quadratic <- lm(Happiness ~ gini_index*gini_index+ gini_index+comp_index + social_sup +life_expec, data = merged)
+summary(model_quadratic)
+confint(model_quadratic)
 
 
+```
+
+```{r, include=TRUE}
+#Creating models where we add each individual explanatory variable to the model one at a time to assess its impact. 
+
+model_1 <-lm(Happiness ~ comp_index, data = merged )
+summary(model_1)
+
+model_2 <-lm(Happiness ~ comp_index + gini_index, data = merged )
+summary(model_2)
+
+model_3 <-lm(Happiness ~ comp_index + gini_index + log_gdp_percap, data = merged )
+summary(model_3)
+
+model_4 <-lm(Happiness ~ comp_index + gini_index + log_gdp_percap + social_sup, data = merged )
+summary(model_4)
+
+model_5 <-lm(Happiness ~ comp_index + gini_index + log_gdp_percap + social_sup + life_expec, data = merged )
+summary(model_5)
+
+Prep_Models <- list(model_1, model_2,model_3, model_4, model_5)
+
+stargazer(Prep_Models, 
+          title =("Single Explanatory Variables: Variable Inclusion Methodology"),
+          type = "text",
+          keep.stat = c("n","rsq"),
+          header=FALSE, # to get rid of r package output text
+
+          single.row = TRUE, # to put coefficients and standard errors on same line
+
+          no.space = TRUE, # to remove the spaces after each line of coefficients
+
+          column.sep.width = "3pt", # to reduce column width
+
+          font.size = "small") # to make font size smaller
+
+```
 
 
